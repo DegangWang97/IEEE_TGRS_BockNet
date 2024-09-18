@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from typing import Tuple
 from torch.nn import init
+import torch.nn.functional as F
 
 class BockNet(nn.Module):
     def __init__(self, blindspot=7, nch_in=189, nch_out=189, nch_ker=64):
@@ -121,15 +122,38 @@ class BockNet(nn.Module):
         nn.init.kaiming_normal_(self.output_conv.weight.data, nonlinearity="linear")
 
     def forward(self, x):
+        orig_h, orig_w = x.shape[2], x.shape[3]
+        
+        pad_h = 0
+        pad_w = 0
+        
+        # 如果h和w不相等，沿短边的方向（右或下）进行镜像填充
+        if orig_h != orig_w:
+            if orig_h > orig_w:
+                pad_w = orig_h - orig_w
+                x = F.pad(x, (0, pad_w, 0, 0), mode='reflect')
+            else:
+                pad_h = orig_w - orig_h
+                x = F.pad(x, (0, 0, 0, pad_h), mode='reflect')
+
+        # 检查h,w是否可以整除 2，不能的话沿右边或下边进行填充
+        new_h, new_w = x.shape[2], x.shape[3]
+        
+        if new_h % 2 != 0:
+            pad_h += 1
+            x = F.pad(x, (0, 0, 0, 1), mode='reflect')
+        
+        if new_w % 2 != 0:
+            pad_w += 1
+            x = F.pad(x, (0, 1, 0, 0), mode='reflect')
+
         if self.blindspot > 0:
             rotated = [rotate(x, rot) for rot in (0, 90, 180, 270)]
             x = torch.cat((rotated), dim=0)
 
         # Encoder
         pool1 = self.encode_block_1(x)
-        
         pool2 = self.encode_block_2(pool1)
-        
         pool3 = self.encode_block_3(pool2)
         pool4 = self.encode_block_4(pool3)
         encoded = self.encode_block_5(pool4)
@@ -140,17 +164,13 @@ class BockNet(nn.Module):
         upsample4 = self.decode_block_4(concat5)
         concat4 = torch.cat((upsample4, pool3), dim=1)
         upsample3 = self.decode_block_3(concat4)
-        
         upsample2 = self.decode_block_2(upsample3)
-        
         concat2 = torch.cat((upsample2, pool1), dim=1)
         upsample1 = self.decode_block_1(concat2)
-        
+
         # Output
         if self.blindspot > 0:  
-            # Apply shift
             shifted = self.shift(upsample1)
-            # Unstack, rotate and cat
             rotated_batch = torch.chunk(shifted, 4, dim=0)
             aligned = [
                 rotate(rotated, rot)
@@ -159,8 +179,12 @@ class BockNet(nn.Module):
             x_r = torch.cat(aligned, dim=1)
         else:
             x_r = upsample1
-        
+
         x_r = self.output_block(x_r)
+
+        # 恢复到原始尺寸，去掉先前增加的 padding 部分
+        if pad_h > 0 or pad_w > 0:
+            x_r = x_r[:, :, :orig_h, :orig_w]
 
         return x_r
     
