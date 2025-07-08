@@ -127,14 +127,18 @@ class BockNet(nn.Module):
         pad_h = 0
         pad_w = 0
         
-        # 如果h和w不相等，沿短边的方向（右或下）进行镜像填充
-        if orig_h != orig_w:
-            if orig_h > orig_w:
-                pad_w = orig_h - orig_w
-                x = F.pad(x, (0, pad_w, 0, 0), mode='reflect')
+        while x.shape[2] != x.shape[3]:
+            h, w = x.shape[2], x.shape[3]
+            if h < w:
+                pad = min((w - h), h - 1)
+                x = F.pad(x, (0, 0, 0, pad), mode='reflect')
+                pad_h += pad
+                h += pad
             else:
-                pad_h = orig_w - orig_h
-                x = F.pad(x, (0, 0, 0, pad_h), mode='reflect')
+                pad = min((h - w), w - 1)
+                x = F.pad(x, (0, pad, 0, 0), mode='reflect')
+                pad_w += pad
+                w += pad
 
         # 检查h,w是否可以整除 2，不能的话沿右边或下边进行填充
         new_h, new_w = x.shape[2], x.shape[3]
